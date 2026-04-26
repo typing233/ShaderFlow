@@ -94,21 +94,13 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ isOpen, onClose }) => 
     }
   }, [isOpen]);
 
+  if (!isOpen) return null;
+
   return (
-    <div
-      className={cn(
-        'fixed inset-0 z-50 flex items-center justify-center transition-opacity duration-200',
-        isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
-      )}
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
 
-      <div
-        className={cn(
-          'relative w-full max-w-md mx-4 bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl transition-transform duration-200',
-          isOpen ? 'scale-100' : 'scale-95'
-        )}
-      >
+      <div className="relative w-full max-w-md mx-4 bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl">
         <div className="flex items-center justify-between p-4 border-b border-gray-800">
           <h2 className="text-lg font-semibold text-gray-200">分享 / 导出</h2>
           <button
