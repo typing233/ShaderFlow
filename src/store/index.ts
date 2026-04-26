@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { ShaderCode, UniformValue, UniformConfig, Message, AppSettings, PreviewState } from '@/types';
+import { ShaderCode, UniformConfig, Message, AppSettings, PreviewState } from '@/types';
 
 interface AppState {
   shaderCode: ShaderCode;

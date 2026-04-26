@@ -7,6 +7,16 @@ interface ShaderCanvasProps {
   className?: string;
 }
 
+interface ShaderCanvasRef {
+  getCanvas: () => HTMLCanvasElement | null;
+}
+
+declare global {
+  interface Window {
+    shaderCanvasRef?: ShaderCanvasRef;
+  }
+}
+
 function createShaderMaterial(
   vertexShader: string,
   fragmentShader: string
@@ -96,8 +106,13 @@ export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
   const meshRef = useRef<THREE.Mesh | null>(null);
   const materialRef = useRef<THREE.ShaderMaterial | null>(null);
   const animationRef = useRef<number | null>(null);
-  const startTimeRef = useRef<number>(Date.now());
+  // Track accumulated shader time so pausing doesn't cause time jumps on resume
+  const shaderTimeRef = useRef<number>(0);
+  const lastFrameTimeRef = useRef<number>(Date.now());
   const isPlayingRef = useRef<boolean>(true);
+  const speedRef = useRef<number>(1);
+  // Throttle store updates to ~10 fps to avoid excessive React re-renders
+  const lastPreviewUpdateRef = useRef<number>(0);
 
   const {
     shaderCode,
@@ -106,6 +121,14 @@ export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
     preview,
     updatePreview,
   } = useAppStore();
+
+  // Keep latest uniforms/uniformValues in refs so shader-code effect can sync
+  // without including them in its dependency array (which would cause unnecessary
+  // material recreation on every slider change)
+  const uniformsRef = useRef(uniforms);
+  const uniformValuesRef = useRef(uniformValues);
+  uniformsRef.current = uniforms;
+  uniformValuesRef.current = uniformValues;
 
   const getCanvas = useCallback((): HTMLCanvasElement | null => {
     return rendererRef.current?.domElement || null;
@@ -142,25 +165,27 @@ export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
     scene.add(mesh);
     meshRef.current = mesh;
 
-    startTimeRef.current = Date.now();
+    lastFrameTimeRef.current = Date.now();
 
     const handleResize = () => {
-      if (!container || !renderer || !camera) return;
+      if (!container || !renderer) return;
       const width = container.clientWidth;
       const height = container.clientHeight;
       renderer.setSize(width, height);
       updatePreview({ resolution: { width, height } });
-      
+
       if (materialRef.current) {
         materialRef.current.uniforms.resolution.value.set(width, height);
       }
     };
 
-    window.addEventListener('resize', handleResize);
+    // Use ResizeObserver to handle panel open/close as well as window resize
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(container);
     handleResize();
 
     return () => {
-      window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
@@ -169,6 +194,8 @@ export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
       material.dispose();
       container.removeChild(renderer.domElement);
     };
+    // Intentionally run once on mount; shaderCode provides initial values only
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -192,7 +219,9 @@ export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
       materialRef.current = newMaterial;
     }
 
-    syncAllUniforms(newMaterial, uniforms, uniformValues);
+    // Use refs to read latest uniforms without adding them to the dep array,
+    // which would cause unnecessary material recreation on every slider change.
+    syncAllUniforms(newMaterial, uniformsRef.current, uniformValuesRef.current);
   }, [shaderCode.vertex, shaderCode.fragment]);
 
   useEffect(() => {
@@ -205,6 +234,10 @@ export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
   }, [preview.isPlaying]);
 
   useEffect(() => {
+    speedRef.current = preview.speed;
+  }, [preview.speed]);
+
+  useEffect(() => {
     const animate = () => {
       if (!materialRef.current || !rendererRef.current || !sceneRef.current || !cameraRef.current) {
         animationRef.current = requestAnimationFrame(animate);
@@ -212,12 +245,18 @@ export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
       }
 
       const now = Date.now();
-      const elapsed = (now - startTimeRef.current) / 1000;
+      const delta = (now - lastFrameTimeRef.current) / 1000;
+      lastFrameTimeRef.current = now;
 
       if (isPlayingRef.current) {
-        const timeValue = elapsed * preview.speed;
-        materialRef.current.uniforms.time.value = timeValue;
-        updatePreview({ time: timeValue });
+        shaderTimeRef.current += delta * speedRef.current;
+        materialRef.current.uniforms.time.value = shaderTimeRef.current;
+
+        // Throttle store updates to ~10 fps to avoid excessive React re-renders
+        if (now - lastPreviewUpdateRef.current >= 100) {
+          updatePreview({ time: shaderTimeRef.current });
+          lastPreviewUpdateRef.current = now;
+        }
       }
 
       rendererRef.current.render(sceneRef.current, cameraRef.current);
@@ -231,12 +270,14 @@ export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [preview.speed]);
+    // updatePreview is a stable Zustand action; animation loop runs once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
-    (window as any).shaderCanvasRef = { getCanvas };
+    window.shaderCanvasRef = { getCanvas };
     return () => {
-      delete (window as any).shaderCanvasRef;
+      delete window.shaderCanvasRef;
     };
   }, [getCanvas]);
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo } from 'react';
-import { UniformConfig, UniformType } from '@/types';
+import { UniformConfig } from '@/types';
 import { useAppStore } from '@/store';
 import { hexToRgb, rgbToHex } from '@/lib/uniformParser';
 

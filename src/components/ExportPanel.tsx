@@ -8,11 +8,16 @@ import {
   downloadScreenshot,
   downloadVideo 
 } from '@/lib/exporter';
-import { clsx } from 'clsx';
-import { twMerge } from 'tailwind-merge';
+import { cn } from '@/lib/cn';
 
-function cn(...inputs: any[]) {
-  return twMerge(clsx(inputs));
+interface ShaderCanvasRef {
+  getCanvas: () => HTMLCanvasElement | null;
+}
+
+declare global {
+  interface Window {
+    shaderCanvasRef?: ShaderCanvasRef;
+  }
 }
 
 interface ExportPanelProps {
@@ -61,7 +66,7 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ isOpen, onClose }) => 
   };
 
   const handleScreenshot = async () => {
-    const canvasRef = (window as any).shaderCanvasRef;
+    const canvasRef = window.shaderCanvasRef;
     if (canvasRef) {
       const canvas = canvasRef.getCanvas();
       if (canvas) {
@@ -72,7 +77,7 @@ export const ExportPanel: React.FC<ExportPanelProps> = ({ isOpen, onClose }) => 
   };
 
   const handleRecordVideo = async () => {
-    const canvasRef = (window as any).shaderCanvasRef;
+    const canvasRef = window.shaderCanvasRef;
     if (canvasRef) {
       const canvas = canvasRef.getCanvas();
       if (canvas) {

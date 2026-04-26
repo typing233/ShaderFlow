@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useEffect } from 'react';
+import React, { useCallback, useRef } from 'react';
 import Editor, { OnMount, OnChange } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
 import { useAppStore } from '@/store';
@@ -46,7 +46,7 @@ const GLSL_TOKENS_PROVIDER: monaco.languages.IMonarchLanguage = {
     'precision', 'highp', 'mediump', 'lowp',
     'layout', 'location', 'flat', 'smooth', 'noperspective',
     'invariant', 'centroid', 'sample', 'patch',
-    'subroutine', 'inout',
+    'subroutine',
   ],
 
   builtins: [
@@ -85,7 +85,7 @@ const GLSL_TOKENS_PROVIDER: monaco.languages.IMonarchLanguage = {
     '<', '>', '<=', '>=', '==', '!=', '&&', '||', '?', ':',
   ],
 
-  symbols: /[=><!~?:&|+\-*\/\^%]+/,
+  symbols: /[=><!~?:&|+\-*^%]+/,
 
   escapes: /\\(?:[abfnrtv\\"']|x[0-9A-Fa-f]{1,4}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8})/,
 
@@ -101,11 +101,11 @@ const GLSL_TOKENS_PROVIDER: monaco.languages.IMonarchLanguage = {
         },
       }],
 
-      [/[A-Z][\w\$]*/, 'type.identifier'],
+      [/[A-Z][\w$]*/, 'type.identifier'],
 
       { include: '@whitespace' },
 
-      [/[{}()\[\]]/, '@brackets'],
+      [/[{}()[\]]/, '@brackets'],
 
       [/@symbols/, {
         cases: {
@@ -114,7 +114,7 @@ const GLSL_TOKENS_PROVIDER: monaco.languages.IMonarchLanguage = {
         },
       }],
 
-      [/\d*\.\d+([eE][\-+]?\d+)?/, 'number.float'],
+      [/\d*\.\d+([eE][-+]?\d+)?/, 'number.float'],
       [/0[xX][0-9a-fA-F]+/, 'number.hex'],
       [/\d+/, 'number'],
 
@@ -122,10 +122,10 @@ const GLSL_TOKENS_PROVIDER: monaco.languages.IMonarchLanguage = {
     ],
 
     comment: [
-      [/[^\/*]+/, 'comment'],
+      [/[^/*]+/, 'comment'],
       [/\/\*/, 'comment', '@push'],
       ['\\*/', 'comment', '@pop'],
-      [/[\/*]/, 'comment'],
+      [/[/*]/, 'comment'],
     ],
 
     whitespace: [
@@ -201,7 +201,8 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({ className }) => {
         if (parsedUniforms.length > 0) {
           setUniforms(parsedUniforms);
         }
-      } catch (e) {
+      } catch {
+        // ignore parse errors during editing
       }
     },
     [updateFragmentShader, setUniforms]
