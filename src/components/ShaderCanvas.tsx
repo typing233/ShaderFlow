@@ -11,7 +11,7 @@ function createShaderMaterial(
   vertexShader: string,
   fragmentShader: string
 ): THREE.ShaderMaterial {
-  return new THREE.ShaderMaterial({
+  return new THREE.RawShaderMaterial({
     vertexShader,
     fragmentShader,
     uniforms: {

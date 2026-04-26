@@ -30,12 +30,15 @@ interface AppState {
 }
 
 const defaultVertexShader = `
-attribute vec2 position;
+precision highp float;
+
+attribute vec3 position;
+attribute vec2 uv;
 varying vec2 vUv;
 
 void main() {
-  vUv = position * 0.5 + 0.5;
-  gl_Position = vec4(position, 0.0, 1.0);
+  vUv = uv;
+  gl_Position = vec4(position, 1.0);
 }
 `;
 
