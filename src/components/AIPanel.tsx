@@ -3,12 +3,7 @@ import { Send, Loader2, Bot, User, Sparkles, Settings, RotateCcw } from 'lucide-
 import { useAppStore } from '@/store';
 import { callDeepseekAPI, buildUserPrompt, DeepseekMessage } from '@/lib/deepseek';
 import { parseUniformsFromAIResponse } from '@/lib/uniformParser';
-import { clsx } from 'clsx';
-import { twMerge } from 'tailwind-merge';
-
-function cn(...inputs: any[]) {
-  return twMerge(clsx(inputs));
-}
+import { cn } from '@/lib/cn';
 
 interface MessageItemProps {
   role: 'user' | 'assistant' | 'system';
@@ -128,8 +123,8 @@ export const AIPanel: React.FC<AIPanelProps> = ({ className, onOpenSettings }) =
           setUniforms(parsed.uniforms);
         }
       }
-    } catch (err: any) {
-      setError(err.message || '生成失败，请重试');
+    } catch (err: unknown) {
+      setError((err as Error).message || '生成失败，请重试');
     } finally {
       setIsGenerating(false);
     }

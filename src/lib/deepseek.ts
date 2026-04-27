@@ -1,4 +1,4 @@
-import { ShaderCode, UniformConfig } from '@/types';
+import { UniformConfig } from '@/types';
 
 export interface DeepseekMessage {
   role: 'system' | 'user' | 'assistant';

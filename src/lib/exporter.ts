@@ -36,7 +36,7 @@ export function parseShareLink(): {
   
   try {
     const decoded = decodeURIComponent(compressed);
-    const jsonString = atob(decoded);
+    const jsonString = decodeURIComponent(atob(decoded));
     const data = JSON.parse(jsonString);
     
     if (data.v === 1 && data.shader) {

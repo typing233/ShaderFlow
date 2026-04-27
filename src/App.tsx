@@ -8,12 +8,7 @@ import { UniformControl } from '@/components/UniformControl';
 import { AIPanel } from '@/components/AIPanel';
 import { SettingsPanel } from '@/components/SettingsPanel';
 import { ExportPanel } from '@/components/ExportPanel';
-import { clsx } from 'clsx';
-import { twMerge } from 'tailwind-merge';
-
-function cn(...inputs: any[]) {
-  return twMerge(clsx(inputs));
-}
+import { cn } from '@/lib/cn';
 
 type ActivePanel = 'code' | 'controls' | 'ai' | null;
 

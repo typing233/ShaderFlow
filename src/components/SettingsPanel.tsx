@@ -1,12 +1,7 @@
 import React, { useState } from 'react';
 import { X, Key, Globe, Code, Eye, EyeOff } from 'lucide-react';
 import { useAppStore } from '@/store';
-import { clsx } from 'clsx';
-import { twMerge } from 'tailwind-merge';
-
-function cn(...inputs: any[]) {
-  return twMerge(clsx(inputs));
-}
+import { cn } from '@/lib/cn';
 
 interface SettingsPanelProps {
   isOpen: boolean;

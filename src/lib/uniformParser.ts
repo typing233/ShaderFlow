@@ -120,8 +120,8 @@ export function parseUniformsFromAIResponse(response: string): {
   uniforms: UniformConfig[];
   shaderCode: string;
 } | null {
-  const jsonMatch = response.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  const codeMatch = response.match(/```(?:glsl|shader|wgsl)?\s*([\s\S]*?)\s*```/);
+  const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
+  const codeMatch = response.match(/```(?:glsl|shader|wgsl)\s*([\s\S]*?)\s*```/);
   
   let uniforms: UniformConfig[] = [];
   let shaderCode = '';
@@ -136,6 +136,7 @@ export function parseUniformsFromAIResponse(response: string): {
         shaderCode = parsed.shaderCode || parsed.fragment;
       }
     } catch {
+      // ignore malformed JSON
     }
   }
   
