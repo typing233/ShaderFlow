@@ -310,6 +310,13 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         settings: state.settings,
         messages: state.messages,
+        shaderCode: state.shaderCode,
+        uniforms: state.uniforms,
+        uniformValues: state.uniformValues,
+        shaderSlots: state.shaderSlots,
+        activeSlotId: state.activeSlotId,
+        mixerConfig: state.mixerConfig,
+        multiEffectMode: state.multiEffectMode,
       }),
     }
   )

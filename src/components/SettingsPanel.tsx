@@ -35,7 +35,6 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
     
     if (result.success) {
       setConnectionStatus('success');
-      updateSettings(tempSettings);
     } else {
       setConnectionStatus('error', result.error);
     }
