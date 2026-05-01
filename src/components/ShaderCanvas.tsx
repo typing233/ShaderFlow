@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { useAppStore } from '@/store';
-import { UniformConfig, UniformType } from '@/types';
+import { UniformConfig, UniformType, ShaderSlot } from '@/types';
 
 interface ShaderCanvasProps {
   className?: string;
@@ -17,6 +17,46 @@ declare global {
   }
 }
 
+const BLEND_FRAGMENT_SHADER = `
+precision highp float;
+
+uniform sampler2D uTexture1;
+uniform sampler2D uTexture2;
+uniform sampler2D uMaskTexture;
+uniform float uBlendAmount;
+uniform float uMaskIntensity;
+uniform bool uUseMask;
+varying vec2 vUv;
+
+void main() {
+  vec4 color1 = texture2D(uTexture1, vUv);
+  vec4 color2 = texture2D(uTexture2, vUv);
+  
+  float blendFactor = uBlendAmount;
+  
+  if (uUseMask) {
+    vec4 maskColor = texture2D(uMaskTexture, vUv);
+    float maskValue = (maskColor.r + maskColor.g + maskColor.b) / 3.0;
+    blendFactor = mix(blendFactor, maskValue * uMaskIntensity, uMaskIntensity);
+  }
+  
+  gl_FragColor = mix(color1, color2, clamp(blendFactor, 0.0, 1.0));
+}
+`;
+
+const VERTEX_SHADER = `
+precision highp float;
+
+attribute vec3 position;
+attribute vec2 uv;
+varying vec2 vUv;
+
+void main() {
+  vUv = uv;
+  gl_Position = vec4(position, 1.0);
+}
+`;
+
 function createShaderMaterial(
   vertexShader: string,
   fragmentShader: string
@@ -27,6 +67,21 @@ function createShaderMaterial(
     uniforms: {
       time: { value: 0 },
       resolution: { value: new THREE.Vector2(1, 1) },
+    },
+  });
+}
+
+function createBlendMaterial(): THREE.ShaderMaterial {
+  return new THREE.RawShaderMaterial({
+    vertexShader: VERTEX_SHADER,
+    fragmentShader: BLEND_FRAGMENT_SHADER,
+    uniforms: {
+      uTexture1: { value: null },
+      uTexture2: { value: null },
+      uMaskTexture: { value: null },
+      uBlendAmount: { value: 0.5 },
+      uMaskIntensity: { value: 1.0 },
+      uUseMask: { value: false },
     },
   });
 }
@@ -98,6 +153,12 @@ function syncAllUniforms(
   });
 }
 
+interface SlotRenderContext {
+  slotId: string;
+  material: THREE.ShaderMaterial;
+  renderTarget: THREE.WebGLRenderTarget;
+}
+
 export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -105,14 +166,15 @@ export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
   const cameraRef = useRef<THREE.OrthographicCamera | null>(null);
   const meshRef = useRef<THREE.Mesh | null>(null);
   const materialRef = useRef<THREE.ShaderMaterial | null>(null);
+  const blendMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
   const animationRef = useRef<number | null>(null);
-  // Track accumulated shader time so pausing doesn't cause time jumps on resume
   const shaderTimeRef = useRef<number>(0);
   const lastFrameTimeRef = useRef<number>(Date.now());
   const isPlayingRef = useRef<boolean>(true);
   const speedRef = useRef<number>(1);
-  // Throttle store updates to ~10 fps to avoid excessive React re-renders
   const lastPreviewUpdateRef = useRef<number>(0);
+  const slotContextsRef = useRef<Map<string, SlotRenderContext>>(new Map());
+  const intermediateRenderTargetRef = useRef<THREE.WebGLRenderTarget | null>(null);
 
   const {
     shaderCode,
@@ -120,19 +182,87 @@ export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
     uniformValues,
     preview,
     updatePreview,
+    shaderSlots,
+    multiEffectMode,
+    mixerConfig,
+    activeSlotId,
   } = useAppStore();
 
-  // Keep latest uniforms/uniformValues in refs so shader-code effect can sync
-  // without including them in its dependency array (which would cause unnecessary
-  // material recreation on every slider change)
   const uniformsRef = useRef(uniforms);
   const uniformValuesRef = useRef(uniformValues);
+  const shaderSlotsRef = useRef(shaderSlots);
+  const multiEffectModeRef = useRef(multiEffectMode);
+  const mixerConfigRef = useRef(mixerConfig);
+  const activeSlotIdRef = useRef(activeSlotId);
+  const shaderCodeRef = useRef(shaderCode);
+  
   uniformsRef.current = uniforms;
   uniformValuesRef.current = uniformValues;
+  shaderSlotsRef.current = shaderSlots;
+  multiEffectModeRef.current = multiEffectMode;
+  mixerConfigRef.current = mixerConfig;
+  activeSlotIdRef.current = activeSlotId;
+  shaderCodeRef.current = shaderCode;
 
   const getCanvas = useCallback((): HTMLCanvasElement | null => {
     return rendererRef.current?.domElement || null;
   }, []);
+
+  const createRenderTarget = useCallback((width: number, height: number) => {
+    return new THREE.WebGLRenderTarget(width, height, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+      type: THREE.HalfFloatType,
+    });
+  }, []);
+
+  const getOrCreateSlotContext = useCallback((
+    slot: ShaderSlot,
+    width: number,
+    height: number
+  ): SlotRenderContext => {
+    let context = slotContextsRef.current.get(slot.id);
+    
+    if (!context) {
+      const material = createShaderMaterial(
+        slot.shaderCode.vertex,
+        slot.shaderCode.fragment
+      );
+      const renderTarget = createRenderTarget(width, height);
+      
+      context = {
+        slotId: slot.id,
+        material,
+        renderTarget,
+      };
+      slotContextsRef.current.set(slot.id, context);
+    } else {
+      const currentFragment = context.material.fragmentShader;
+      const newFragment = slot.shaderCode.fragment;
+      
+      if (currentFragment !== newFragment) {
+        const newMaterial = createShaderMaterial(
+          slot.shaderCode.vertex,
+          newFragment
+        );
+        
+        const oldUniforms = context.material.uniforms;
+        Object.keys(oldUniforms).forEach((key) => {
+          if (newMaterial.uniforms[key] === undefined) {
+            newMaterial.uniforms[key] = oldUniforms[key];
+          }
+        });
+        
+        context.material.dispose();
+        context.material = newMaterial;
+      }
+    }
+    
+    syncAllUniforms(context.material, slot.uniforms, slot.uniformValues);
+    
+    return context;
+  }, [createRenderTarget]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -161,9 +291,17 @@ export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
     );
     materialRef.current = material;
 
+    const blendMaterial = createBlendMaterial();
+    blendMaterialRef.current = blendMaterial;
+
     const mesh = new THREE.Mesh(geometry, material);
     scene.add(mesh);
     meshRef.current = mesh;
+
+    intermediateRenderTargetRef.current = createRenderTarget(
+      container.clientWidth,
+      container.clientHeight
+    );
 
     lastFrameTimeRef.current = Date.now();
 
@@ -177,9 +315,17 @@ export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
       if (materialRef.current) {
         materialRef.current.uniforms.resolution.value.set(width, height);
       }
+
+      slotContextsRef.current.forEach((context) => {
+        context.renderTarget.setSize(width, height);
+        context.material.uniforms.resolution.value.set(width, height);
+      });
+
+      if (intermediateRenderTargetRef.current) {
+        intermediateRenderTargetRef.current.setSize(width, height);
+      }
     };
 
-    // Use ResizeObserver to handle panel open/close as well as window resize
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(container);
     handleResize();
@@ -192,10 +338,21 @@ export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
       renderer.dispose();
       geometry.dispose();
       material.dispose();
+      blendMaterial.dispose();
+      
+      slotContextsRef.current.forEach((context) => {
+        context.material.dispose();
+        context.renderTarget.dispose();
+      });
+      slotContextsRef.current.clear();
+      
+      if (intermediateRenderTargetRef.current) {
+        intermediateRenderTargetRef.current.dispose();
+      }
+      
       container.removeChild(renderer.domElement);
     };
-    // Intentionally run once on mount; shaderCode provides initial values only
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -219,8 +376,6 @@ export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
       materialRef.current = newMaterial;
     }
 
-    // Use refs to read latest uniforms without adding them to the dep array,
-    // which would cause unnecessary material recreation on every slider change.
     syncAllUniforms(newMaterial, uniformsRef.current, uniformValuesRef.current);
   }, [shaderCode.vertex, shaderCode.fragment]);
 
@@ -239,7 +394,7 @@ export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
 
   useEffect(() => {
     const animate = () => {
-      if (!materialRef.current || !rendererRef.current || !sceneRef.current || !cameraRef.current) {
+      if (!rendererRef.current || !sceneRef.current || !cameraRef.current || !meshRef.current) {
         animationRef.current = requestAnimationFrame(animate);
         return;
       }
@@ -250,16 +405,112 @@ export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
 
       if (isPlayingRef.current) {
         shaderTimeRef.current += delta * speedRef.current;
-        materialRef.current.uniforms.time.value = shaderTimeRef.current;
 
-        // Throttle store updates to ~10 fps to avoid excessive React re-renders
         if (now - lastPreviewUpdateRef.current >= 100) {
           updatePreview({ time: shaderTimeRef.current });
           lastPreviewUpdateRef.current = now;
         }
       }
 
-      rendererRef.current.render(sceneRef.current, cameraRef.current);
+      const container = containerRef.current;
+      const width = container?.clientWidth || 1;
+      const height = container?.clientHeight || 1;
+      const isMultiEffect = multiEffectModeRef.current;
+      const slots = shaderSlotsRef.current.filter(s => s.isVisible);
+
+      if (isMultiEffect && slots.length > 0) {
+        const renderedContexts: SlotRenderContext[] = [];
+        
+        slots.forEach((slot) => {
+          const context = getOrCreateSlotContext(slot, width, height);
+          
+          context.material.uniforms.time.value = shaderTimeRef.current;
+          context.material.uniforms.resolution.value.set(width, height);
+          
+          const oldRenderTarget = rendererRef.current!.getRenderTarget();
+          rendererRef.current!.setRenderTarget(context.renderTarget);
+          
+          meshRef.current!.material = context.material;
+          rendererRef.current!.render(sceneRef.current!, cameraRef.current!);
+          
+          rendererRef.current!.setRenderTarget(oldRenderTarget);
+          
+          renderedContexts.push(context);
+        });
+
+        if (renderedContexts.length === 1) {
+          const tex = renderedContexts[0].renderTarget.texture;
+          if (materialRef.current) {
+            materialRef.current.uniforms.time.value = shaderTimeRef.current;
+            materialRef.current.uniforms.resolution.value.set(width, height);
+          }
+          
+          if (blendMaterialRef.current) {
+            blendMaterialRef.current.uniforms.uTexture1.value = tex;
+            blendMaterialRef.current.uniforms.uTexture2.value = tex;
+            blendMaterialRef.current.uniforms.uBlendAmount.value = 0;
+            blendMaterialRef.current.uniforms.uUseMask.value = false;
+            meshRef.current!.material = blendMaterialRef.current;
+          }
+        } else if (renderedContexts.length >= 2) {
+          const mixer = mixerConfigRef.current;
+          let currentTexture = renderedContexts[0].renderTarget.texture;
+          
+          for (let i = 1; i < renderedContexts.length; i++) {
+            const nextContext = renderedContexts[i];
+            const slot = slots.find(s => s.id === nextContext.slotId);
+            const blendAmount = slot?.blendAmount ?? 0.5;
+            
+            if (blendMaterialRef.current) {
+              blendMaterialRef.current.uniforms.uTexture1.value = currentTexture;
+              blendMaterialRef.current.uniforms.uTexture2.value = nextContext.renderTarget.texture;
+              blendMaterialRef.current.uniforms.uBlendAmount.value = blendAmount;
+              
+              if (mixer.maskSlotId && i === renderedContexts.length - 1) {
+                const maskContext = slotContextsRef.current.get(mixer.maskSlotId);
+                if (maskContext) {
+                  blendMaterialRef.current.uniforms.uMaskTexture.value = maskContext.renderTarget.texture;
+                  blendMaterialRef.current.uniforms.uMaskIntensity.value = mixer.maskIntensity;
+                  blendMaterialRef.current.uniforms.uUseMask.value = true;
+                } else {
+                  blendMaterialRef.current.uniforms.uUseMask.value = false;
+                }
+              } else {
+                blendMaterialRef.current.uniforms.uUseMask.value = false;
+              }
+              
+              meshRef.current!.material = blendMaterialRef.current;
+              
+              const isLast = i === renderedContexts.length - 1;
+              if (!isLast && intermediateRenderTargetRef.current) {
+                const oldTarget = rendererRef.current!.getRenderTarget();
+                rendererRef.current!.setRenderTarget(intermediateRenderTargetRef.current);
+                rendererRef.current!.render(sceneRef.current!, cameraRef.current!);
+                rendererRef.current!.setRenderTarget(oldTarget);
+                currentTexture = intermediateRenderTargetRef.current.texture;
+              }
+            }
+          }
+        }
+        
+        if (renderedContexts.length >= 2) {
+          rendererRef.current!.setRenderTarget(null);
+          rendererRef.current!.render(sceneRef.current!, cameraRef.current!);
+        } else if (renderedContexts.length === 1 && blendMaterialRef.current) {
+          meshRef.current!.material = blendMaterialRef.current;
+          rendererRef.current!.setRenderTarget(null);
+          rendererRef.current!.render(sceneRef.current!, cameraRef.current!);
+        }
+      } else {
+        if (materialRef.current) {
+          materialRef.current.uniforms.time.value = shaderTimeRef.current;
+          materialRef.current.uniforms.resolution.value.set(width, height);
+        }
+        meshRef.current!.material = materialRef.current;
+        rendererRef.current!.setRenderTarget(null);
+        rendererRef.current!.render(sceneRef.current!, cameraRef.current!);
+      }
+
       animationRef.current = requestAnimationFrame(animate);
     };
 
@@ -270,8 +521,7 @@ export const ShaderCanvas: React.FC<ShaderCanvasProps> = ({ className }) => {
         cancelAnimationFrame(animationRef.current);
       }
     };
-    // updatePreview is a stable Zustand action; animation loop runs once on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

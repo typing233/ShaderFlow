@@ -220,18 +220,37 @@ interface UniformControlProps {
 }
 
 export const UniformControl: React.FC<UniformControlProps> = ({ className }) => {
-  const { uniforms, uniformValues, updateUniformValue } = useAppStore();
+  const {
+    uniforms,
+    uniformValues,
+    updateUniformValue,
+    shaderSlots,
+    activeSlotId,
+    updateShaderSlot,
+  } = useAppStore();
+
+  const activeSlot = shaderSlots.find(s => s.id === activeSlotId);
+  const currentUniforms = activeSlot?.uniforms || uniforms;
+  const currentUniformValues = activeSlot?.uniformValues || uniformValues;
 
   const handleChange = useCallback(
     (name: string, value: number | number[] | boolean) => {
-      updateUniformValue(name, value);
+      if (activeSlot) {
+        const newUniformValues = {
+          ...activeSlot.uniformValues,
+          [name]: value,
+        };
+        updateShaderSlot(activeSlotId, { uniformValues: newUniformValues });
+      } else {
+        updateUniformValue(name, value);
+      }
     },
-    [updateUniformValue]
+    [updateUniformValue, updateShaderSlot, activeSlot, activeSlotId]
   );
 
   const renderControl = useCallback(
     (config: UniformConfig) => {
-      const value = uniformValues[config.name];
+      const value = currentUniformValues[config.name];
       if (value === undefined) return null;
 
       const isColor = config.description === 'color' || 
@@ -308,10 +327,10 @@ export const UniformControl: React.FC<UniformControlProps> = ({ className }) => 
           return null;
       }
     },
-    [uniformValues, handleChange]
+    [currentUniformValues, handleChange]
   );
 
-  const filteredUniforms = uniforms.filter((u) => u.name !== 'time' && u.name !== 'resolution');
+  const filteredUniforms = currentUniforms.filter((u) => u.name !== 'time' && u.name !== 'resolution');
 
   return (
     <div className={`${className || ''}`}>
@@ -320,6 +339,11 @@ export const UniformControl: React.FC<UniformControlProps> = ({ className }) => 
           <h3 className="text-sm font-semibold text-gray-200 uppercase tracking-wide">
             控制参数
           </h3>
+          {activeSlot && (
+            <span className="text-xs text-shader-400 bg-shader-900/30 px-2 py-1 rounded">
+              {activeSlot.name}
+            </span>
+          )}
           <span className="text-xs text-gray-500">{filteredUniforms.length} 个参数</span>
         </div>
 

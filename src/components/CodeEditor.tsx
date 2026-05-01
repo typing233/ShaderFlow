@@ -151,9 +151,19 @@ const GLSL_TOKENS_PROVIDER: monaco.languages.IMonarchLanguage = {
 };
 
 export const CodeEditor: React.FC<CodeEditorProps> = ({ className }) => {
-  const { shaderCode, updateFragmentShader, setUniforms } = useAppStore();
+  const {
+    shaderCode,
+    updateFragmentShader,
+    setUniforms,
+    shaderSlots,
+    activeSlotId,
+    updateShaderSlot,
+  } = useAppStore();
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const languageRegistered = useRef(false);
+
+  const activeSlot = shaderSlots.find(s => s.id === activeSlotId);
+  const currentShaderCode = activeSlot?.shaderCode.fragment || shaderCode.fragment;
 
   const handleEditorMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
@@ -194,18 +204,28 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({ className }) => {
     (value) => {
       if (value === undefined) return;
       
-      updateFragmentShader(value);
-      
       try {
         const parsedUniforms = parseUniformsFromShader(value);
-        if (parsedUniforms.length > 0) {
-          setUniforms(parsedUniforms);
+        
+        if (activeSlot) {
+          updateShaderSlot(activeSlotId, {
+            shaderCode: {
+              ...activeSlot.shaderCode,
+              fragment: value,
+            },
+            uniforms: parsedUniforms.length > 0 ? parsedUniforms : activeSlot.uniforms,
+          });
+        } else {
+          updateFragmentShader(value);
+          if (parsedUniforms.length > 0) {
+            setUniforms(parsedUniforms);
+          }
         }
       } catch {
         // ignore parse errors during editing
       }
     },
-    [updateFragmentShader, setUniforms]
+    [updateFragmentShader, setUniforms, updateShaderSlot, activeSlot, activeSlotId]
   );
 
   return (
@@ -215,7 +235,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({ className }) => {
         width="100%"
         language="glsl"
         theme="shaderflow-dark"
-        value={shaderCode.fragment}
+        value={currentShaderCode}
         onChange={handleChange}
         onMount={handleEditorMount}
         options={{
