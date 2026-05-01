@@ -1,16 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Loader2, Bot, User, Sparkles, Settings, RotateCcw } from 'lucide-react';
+import { Send, Loader2, Bot, User, Sparkles, Settings, RotateCcw, Layers } from 'lucide-react';
 import { useAppStore } from '@/store';
-import { callDeepseekAPI, buildUserPrompt, DeepseekMessage } from '@/lib/deepseek';
+import { callDeepseekAPI, callDeepseekAPIStream, buildUserPrompt, DeepseekMessage } from '@/lib/deepseek';
 import { parseUniformsFromAIResponse } from '@/lib/uniformParser';
 import { cn } from '@/lib/cn';
 
 interface MessageItemProps {
   role: 'user' | 'assistant' | 'system';
   content: string;
+  isStreaming?: boolean;
 }
 
-const MessageItem: React.FC<MessageItemProps> = ({ role, content }) => {
+const MessageItem: React.FC<MessageItemProps> = ({ role, content, isStreaming }) => {
   const isUser = role === 'user';
   
   return (
@@ -29,9 +30,13 @@ const MessageItem: React.FC<MessageItemProps> = ({ role, content }) => {
       <div className="flex-1 min-w-0">
         <div className="text-xs text-gray-500 mb-1">
           {isUser ? '你' : 'AI 助手'}
+          {isStreaming && <span className="ml-2 text-shader-400 animate-pulse">正在生成...</span>}
         </div>
         <div className="text-sm text-gray-200 whitespace-pre-wrap break-words">
           {content}
+          {isStreaming && (
+            <span className="inline-block w-1.5 h-4 bg-shader-400 ml-0.5 animate-pulse" />
+          )}
         </div>
       </div>
     </div>
@@ -55,13 +60,22 @@ export const AIPanel: React.FC<AIPanelProps> = ({ className, onOpenSettings }) =
     setUniforms,
     isGenerating,
     setIsGenerating,
+    generationStream,
+    setGenerationStream,
+    appendToGenerationStream,
     error,
     setError,
+    addShaderSlot,
+    shaderSlots,
+    activeSlotId,
+    updateShaderSlot,
+    setActiveSlot,
   } = useAppStore();
 
   const [inputValue, setInputValue] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [showNewSlot, setShowNewSlot] = useState(false);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -69,13 +83,14 @@ export const AIPanel: React.FC<AIPanelProps> = ({ className, onOpenSettings }) =
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, isGenerating]);
+  }, [messages, isGenerating, generationStream]);
 
   const handleSubmit = async () => {
     if (!inputValue.trim() || isGenerating) return;
 
     const userInput = inputValue.trim();
     setInputValue('');
+    setGenerationStream('');
 
     addMessage({
       role: 'user',
@@ -93,10 +108,14 @@ export const AIPanel: React.FC<AIPanelProps> = ({ className, onOpenSettings }) =
           content: m.content,
         }));
 
+      const activeSlot = shaderSlots.find(s => s.id === activeSlotId);
+      const currentShader = activeSlot?.shaderCode.fragment || shaderCode.fragment;
+      const currentUniforms = activeSlot?.uniforms || uniforms;
+
       const prompt = buildUserPrompt(
         userInput,
-        messages.length > 0 ? shaderCode.fragment : undefined,
-        messages.length > 0 ? uniforms : undefined
+        messages.length > 0 ? currentShader : undefined,
+        messages.length > 0 ? currentUniforms : undefined
       );
 
       conversationMessages.push({
@@ -104,28 +123,54 @@ export const AIPanel: React.FC<AIPanelProps> = ({ className, onOpenSettings }) =
         content: prompt,
       });
 
-      const response = await callDeepseekAPI(
+      let fullResponse = '';
+
+      await callDeepseekAPIStream(
         conversationMessages,
         settings.apiKey,
         settings.baseUrl,
-        settings.model
-      );
+        settings.model,
+        {
+          onChunk: (content) => {
+            fullResponse += content;
+            appendToGenerationStream(content);
+          },
+          onComplete: () => {
+            addMessage({
+              role: 'assistant',
+              content: fullResponse,
+            });
 
-      addMessage({
-        role: 'assistant',
-        content: response,
-      });
-
-      const parsed = parseUniformsFromAIResponse(response);
-      if (parsed) {
-        updateFragmentShader(parsed.shaderCode);
-        if (parsed.uniforms.length > 0) {
-          setUniforms(parsed.uniforms);
+            const parsed = parseUniformsFromAIResponse(fullResponse);
+            if (parsed) {
+              if (activeSlot) {
+                updateShaderSlot(activeSlotId, {
+                  shaderCode: {
+                    ...activeSlot.shaderCode,
+                    fragment: parsed.shaderCode,
+                  },
+                  uniforms: parsed.uniforms.length > 0 ? parsed.uniforms : activeSlot.uniforms,
+                });
+              } else {
+                updateFragmentShader(parsed.shaderCode);
+                if (parsed.uniforms.length > 0) {
+                  setUniforms(parsed.uniforms);
+                }
+              }
+            }
+            
+            setGenerationStream('');
+            setIsGenerating(false);
+          },
+          onError: (errorMsg) => {
+            setError(errorMsg);
+            setGenerationStream('');
+            setIsGenerating(false);
+          }
         }
-      }
+      );
     } catch (err: unknown) {
       setError((err as Error).message || '生成失败，请重试');
-    } finally {
       setIsGenerating(false);
     }
   };
@@ -137,6 +182,12 @@ export const AIPanel: React.FC<AIPanelProps> = ({ className, onOpenSettings }) =
     }
   };
 
+  const handleAddNewSlot = () => {
+    const newId = addShaderSlot();
+    setShowNewSlot(false);
+    setActiveSlot(newId);
+  };
+
   return (
     <div className={cn('flex flex-col h-full bg-gray-900/90', className)}>
       <div className="flex items-center justify-between p-3 border-b border-gray-800">
@@ -145,6 +196,15 @@ export const AIPanel: React.FC<AIPanelProps> = ({ className, onOpenSettings }) =
           <span className="text-sm font-medium text-gray-200">AI 生成</span>
         </div>
         <div className="flex items-center gap-1">
+          {shaderSlots.length > 0 && (
+            <button
+              onClick={() => setShowNewSlot(!showNewSlot)}
+              className="p-2 text-gray-400 hover:text-shader-400 hover:bg-gray-800 rounded-lg transition-colors"
+              title="为新效果生成"
+            >
+              <Layers size={16} />
+            </button>
+          )}
           <button
             onClick={clearMessages}
             className="p-2 text-gray-400 hover:text-gray-200 hover:bg-gray-800 rounded-lg transition-colors"
@@ -162,6 +222,37 @@ export const AIPanel: React.FC<AIPanelProps> = ({ className, onOpenSettings }) =
         </div>
       </div>
 
+      {showNewSlot && shaderSlots.length > 0 && (
+        <div className="px-4 py-3 bg-gray-800/50 border-b border-gray-800">
+          <p className="text-xs text-gray-400 mb-2">选择生成目标：</p>
+          <div className="flex flex-wrap gap-2">
+            {shaderSlots.map((slot) => (
+              <button
+                key={slot.id}
+                onClick={() => {
+                  setActiveSlot(slot.id);
+                  setShowNewSlot(false);
+                }}
+                className={cn(
+                  'px-3 py-1.5 text-xs rounded-lg transition-colors',
+                  slot.id === activeSlotId
+                    ? 'bg-shader-500/20 text-shader-400 border border-shader-500/40'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                )}
+              >
+                {slot.name} {slot.id === activeSlotId && '✓'}
+              </button>
+            ))}
+            <button
+              onClick={handleAddNewSlot}
+              className="px-3 py-1.5 text-xs bg-gray-800 text-gray-400 hover:text-gray-200 hover:bg-gray-700 rounded-lg border border-dashed border-gray-600 transition-colors"
+            >
+              + 新建效果
+            </button>
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="px-4 py-2 bg-red-900/30 border-b border-red-800/50">
           <p className="text-sm text-red-400">{error}</p>
@@ -171,7 +262,7 @@ export const AIPanel: React.FC<AIPanelProps> = ({ className, onOpenSettings }) =
       {!settings.apiKey && (
         <div className="p-4 m-3 bg-yellow-900/30 border border-yellow-800/50 rounded-lg">
           <p className="text-sm text-yellow-300 mb-2">
-            请先配置 Deepseek API Key 才能使用 AI 生成功能
+            请先配置 API Key 才能使用 AI 生成功能
           </p>
           <button
             onClick={onOpenSettings}
@@ -183,7 +274,7 @@ export const AIPanel: React.FC<AIPanelProps> = ({ className, onOpenSettings }) =
       )}
 
       <div className="flex-1 overflow-y-auto">
-        {messages.length === 0 && (
+        {messages.length === 0 && !isGenerating && (
           <div className="flex flex-col items-center justify-center h-full text-center px-6 py-12">
             <div className="w-16 h-16 rounded-full bg-shader-900/50 flex items-center justify-center mb-4">
               <Sparkles size={32} className="text-shader-400" />
@@ -194,12 +285,24 @@ export const AIPanel: React.FC<AIPanelProps> = ({ className, onOpenSettings }) =
             <p className="text-sm text-gray-400 max-w-xs">
               例如："创建一个流动的火焰效果" 或 "做一个星空背景，带闪烁的星星"
             </p>
+            
+            {shaderSlots.length > 1 && (
+              <div className="mt-4 px-4 py-2 bg-gray-800/50 rounded-lg">
+                <p className="text-xs text-gray-500">
+                  当前编辑: {shaderSlots.find(s => s.id === activeSlotId)?.name || '效果 1'}
+                </p>
+                <p className="text-xs text-gray-500">
+                  点击 <span className="text-shader-400">图层</span> 图标可切换目标效果
+                </p>
+              </div>
+            )}
+            
             <div className="mt-6 space-y-2 w-full max-w-xs">
               {[
                 '流动的彩色波纹效果',
                 '像素风格的火焰动画',
                 '动态渐变的星云背景',
-                '数字雨效果',
+                '紫色旋涡带发光粒子',
               ].map((example, i) => (
                 <button
                   key={i}
@@ -221,7 +324,15 @@ export const AIPanel: React.FC<AIPanelProps> = ({ className, onOpenSettings }) =
           />
         ))}
 
-        {isGenerating && (
+        {isGenerating && generationStream && (
+          <MessageItem
+            role="assistant"
+            content={generationStream}
+            isStreaming={true}
+          />
+        )}
+
+        {isGenerating && !generationStream && (
           <div className="flex gap-3 p-4 bg-gray-800/50">
             <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-gray-700 text-gray-300">
               <Loader2 size={16} className="animate-spin" />
@@ -230,7 +341,7 @@ export const AIPanel: React.FC<AIPanelProps> = ({ className, onOpenSettings }) =
               <div className="text-xs text-gray-500 mb-1">AI 助手</div>
               <div className="flex items-center gap-2 text-sm text-gray-400">
                 <Loader2 size={14} className="animate-spin" />
-                正在生成着色器...
+                正在连接 API...
               </div>
             </div>
           </div>
