@@ -161,7 +161,10 @@ export const useAppStore = create<AppState>()(
         llmConfig: {
           baseUrl: state.llmConfig.baseUrl,
           modelName: state.llmConfig.modelName
-        }
+        },
+        shaderSlots: state.shaderSlots,
+        activeSlotId: state.activeSlotId,
+        mixerConfig: state.mixerConfig
       })
     }
   )
