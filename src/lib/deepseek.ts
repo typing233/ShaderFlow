@@ -22,30 +22,47 @@ export interface DeepseekResponse {
   };
 }
 
+export interface StreamHandler {
+  onChunk: (content: string) => void;
+  onComplete: () => void;
+  onError: (error: string) => void;
+}
+
 const SYSTEM_PROMPT = `你是一个专业的着色器程序员，擅长使用 GLSL 编写 WebGL 片段着色器。
 
 你的任务是根据用户的自然语言描述，生成或修改 GLSL 片段着色器代码。
 
 ## 重要规则：
 
-1. **必须使用 GLSL ES 1.0 语法**（兼容 WebGL 1.0）
-2. **必须包含**：
-   - \`precision highp float;\` 作为第一行
-   - \`varying vec2 vUv;\` 用于接收纹理坐标
-   - 可以使用 \`uniform float time;\` 作为时间变量
-   - 可以使用 \`uniform vec2 resolution;\` 作为分辨率
-   - \`void main()\` 函数
-   - 输出 \`gl_FragColor\`
+1. **必须使用 GLSL ES 1.00 语法**（兼容 WebGL 1.0 和 WebGL 2.0）
+   - 使用 \`varying\` 而不是 \`in/out\`
+   - 使用 \`gl_FragColor\` 作为输出
+   - 不支持 \`layout(location = ...)\` 等 WebGL 2.0 独有特性
 
-3. **代码格式**：
+2. **代码结构要求（必须严格遵循）**：
+   - 第一行必须是：\`precision highp float;\`
+   - 必须包含：\`varying vec2 vUv;\` 用于接收顶点着色器传递的纹理坐标
+   - 可以使用的内置 uniform 变量：
+     - \`uniform float time;\` - 时间（秒）
+     - \`uniform vec2 resolution;\` - 画布分辨率（像素）
+   - 必须定义：\`void main()\` 函数
+   - 必须通过 \`gl_FragColor = vec4(r, g, b, a);\` 输出颜色
+
+3. **vUv 坐标说明**：
+   - \`vUv.x\` 范围: 0.0 (左) 到 1.0 (右)
+   - \`vUv.y\` 范围: 0.0 (下) 到 1.0 (上)
+   - 如果需要宽高比校正：\`uv.x *= resolution.x / resolution.y;\`
+
+4. **代码格式**：
    - 将着色器代码包裹在 \`\`\`glsl ... \`\`\` 标记中
    - 如果有自定义 uniform 变量，请在 JSON 中描述
 
-4. **Uniform 变量规范**：
+5. **Uniform 变量规范**：
    - 为每个自定义 uniform 变量提供合理的默认值、范围
-   - 颜色类型的 uniform 使用 vec3 或 vec4
+   - 颜色类型的 uniform 使用 vec3 或 vec4（值范围 0.0 - 1.0）
    - 数值类型使用 float 或 int
    - 为变量提供中文标签便于用户理解
+   - 如果是颜色变量，添加 \`"description": "color"\` 以便自动识别为取色器
 
 ## 响应格式示例：
 
@@ -95,7 +112,62 @@ void main() {
 }
 \`\`\`
 
-请始终遵循这个格式，确保代码可以直接在 WebGL 中运行。`;
+## 顶点着色器（固定，不要修改）：
+\`\`\`glsl
+precision highp float;
+attribute vec3 position;
+attribute vec2 uv;
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = vec4(position, 1.0);
+}
+\`\`\`
+
+请始终遵循这个格式，确保生成的片段着色器可以直接与上述顶点着色器配合运行。`;
+
+export async function testConnection(
+  apiKey: string,
+  baseUrl: string = 'https://api.deepseek.com',
+  model: string = 'deepseek-chat'
+): Promise<{ success: boolean; error?: string; models?: string[] }> {
+  if (!apiKey) {
+    return { success: false, error: '请先配置 API Key' };
+  }
+
+  try {
+    const url = `${baseUrl}/v1/models`;
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      return { 
+        success: false, 
+        error: error.error?.message || `API 请求失败: ${response.status}` 
+      };
+    }
+
+    const data = await response.json();
+    const models = data.data?.map((m: { id: string }) => m.id) || [];
+    
+    return { 
+      success: true, 
+      models,
+      error: undefined 
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '连接失败，请检查网络或 API 地址'
+    };
+  }
+}
 
 export async function callDeepseekAPI(
   messages: DeepseekMessage[],
@@ -133,6 +205,91 @@ export async function callDeepseekAPI(
 
   const data: DeepseekResponse = await response.json();
   return data.choices[0]?.message?.content || '';
+}
+
+export async function callDeepseekAPIStream(
+  messages: DeepseekMessage[],
+  apiKey: string,
+  baseUrl: string = 'https://api.deepseek.com',
+  model: string = 'deepseek-chat',
+  handlers: StreamHandler
+): Promise<void> {
+  const { onChunk, onComplete, onError } = handlers;
+
+  if (!apiKey) {
+    onError('请先配置 API Key');
+    return;
+  }
+
+  const url = `${baseUrl}/v1/chat/completions`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system' as const, content: SYSTEM_PROMPT },
+          ...messages,
+        ],
+        temperature: 0.7,
+        max_tokens: 4096,
+        stream: true,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      onError(error.error?.message || `API 请求失败: ${response.status}`);
+      return;
+    }
+
+    if (!response.body) {
+      onError('未收到响应内容');
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6);
+          if (data === '[DONE]') {
+            onComplete();
+            return;
+          }
+          
+          try {
+            const parsed = JSON.parse(data);
+            const content = parsed.choices?.[0]?.delta?.content;
+            if (content) {
+              onChunk(content);
+            }
+          } catch {
+            // Ignore parse errors
+          }
+        }
+      }
+    }
+
+    onComplete();
+  } catch (error) {
+    onError(error instanceof Error ? error.message : '流式请求失败');
+  }
 }
 
 export function buildUserPrompt(

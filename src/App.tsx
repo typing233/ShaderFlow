@@ -1,16 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { Play, Pause, Code2, Sliders, Sparkles, Share2, Settings, Zap } from 'lucide-react';
+import { Play, Pause, Code2, Sliders, Sparkles, Share2, Settings, Zap, Layers } from 'lucide-react';
 import { useAppStore } from '@/store';
 import { parseShareLink } from '@/lib/exporter';
 import { ShaderCanvas } from '@/components/ShaderCanvas';
 import { CodeEditor } from '@/components/CodeEditor';
 import { UniformControl } from '@/components/UniformControl';
 import { AIPanel } from '@/components/AIPanel';
+import { ShaderSlotList } from '@/components/ShaderSlotList';
 import { SettingsPanel } from '@/components/SettingsPanel';
 import { ExportPanel } from '@/components/ExportPanel';
 import { cn } from '@/lib/cn';
 
-type ActivePanel = 'code' | 'controls' | 'ai' | null;
+type ActivePanel = 'code' | 'controls' | 'ai' | 'layers' | null;
 
 function App() {
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
@@ -66,6 +67,19 @@ function App() {
           </button>
 
           <div className="h-6 w-px bg-gray-700 mx-1" />
+
+          <button
+            onClick={() => togglePanel('layers')}
+            className={cn(
+              'flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors',
+              activePanel === 'layers'
+                ? 'bg-shader-500/20 text-shader-400 border border-shader-500/30'
+                : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+            )}
+          >
+            <Layers size={16} />
+            <span className="hidden sm:inline">图层</span>
+          </button>
 
           <button
             onClick={() => togglePanel('ai')}
@@ -154,6 +168,9 @@ function App() {
 
         {activePanel && (
           <aside className="w-full md:w-96 lg:w-[420px] bg-gray-900/95 border-l border-gray-800 flex flex-col overflow-hidden">
+            {activePanel === 'layers' && (
+              <ShaderSlotList className="flex-1" />
+            )}
             {activePanel === 'code' && (
               <CodeEditor className="flex-1" />
             )}
@@ -172,6 +189,18 @@ function App() {
 
       {!activePanel && (
         <div className="md:hidden fixed bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-gray-900/90 backdrop-blur-sm rounded-2xl p-1.5 border border-gray-800 shadow-xl">
+          <button
+            onClick={() => togglePanel('layers')}
+            className={cn(
+              'flex flex-col items-center gap-1 px-4 py-2 rounded-xl text-xs transition-colors',
+              activePanel === 'layers'
+                ? 'bg-shader-500/20 text-shader-400'
+                : 'text-gray-400 hover:text-gray-200'
+            )}
+          >
+            <Layers size={20} />
+            <span>图层</span>
+          </button>
           <button
             onClick={() => togglePanel('ai')}
             className={cn(
