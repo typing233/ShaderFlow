@@ -59,3 +59,22 @@ export interface PreviewState {
   speed: number;
   resolution: { width: number; height: number };
 }
+
+export interface ShaderSlot {
+  id: string;
+  name: string;
+  shaderCode: ShaderCode;
+  uniforms: UniformConfig[];
+  uniformValues: Record<string, number | number[] | boolean>;
+  isMask: boolean;
+  opacity: number;
+  blendMode: 'normal' | 'add' | 'multiply' | 'screen';
+}
+
+export interface MixerConfig {
+  blendAmount: number;
+  maskIntensity: number;
+  maskSlotId: string | null;
+}
+
+export type ConnectionStatus = 'idle' | 'testing' | 'success' | 'error';

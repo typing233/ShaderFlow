@@ -22,6 +22,12 @@ export interface DeepseekResponse {
   };
 }
 
+export interface StreamHandler {
+  onChunk: (content: string) => void;
+  onComplete: () => void;
+  onError: (error: string) => void;
+}
+
 const SYSTEM_PROMPT = `你是一个专业的着色器程序员，擅长使用 GLSL 编写 WebGL 片段着色器。
 
 你的任务是根据用户的自然语言描述，生成或修改 GLSL 片段着色器代码。
@@ -97,6 +103,49 @@ void main() {
 
 请始终遵循这个格式，确保代码可以直接在 WebGL 中运行。`;
 
+export async function testConnection(
+  apiKey: string,
+  baseUrl: string = 'https://api.deepseek.com',
+  model: string = 'deepseek-chat'
+): Promise<{ success: boolean; error?: string; models?: string[] }> {
+  if (!apiKey) {
+    return { success: false, error: '请先配置 API Key' };
+  }
+
+  try {
+    const url = `${baseUrl}/v1/models`;
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      return { 
+        success: false, 
+        error: error.error?.message || `API 请求失败: ${response.status}` 
+      };
+    }
+
+    const data = await response.json();
+    const models = data.data?.map((m: { id: string }) => m.id) || [];
+    
+    return { 
+      success: true, 
+      models,
+      error: undefined 
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : '连接失败，请检查网络或 API 地址'
+    };
+  }
+}
+
 export async function callDeepseekAPI(
   messages: DeepseekMessage[],
   apiKey: string,
@@ -133,6 +182,91 @@ export async function callDeepseekAPI(
 
   const data: DeepseekResponse = await response.json();
   return data.choices[0]?.message?.content || '';
+}
+
+export async function callDeepseekAPIStream(
+  messages: DeepseekMessage[],
+  apiKey: string,
+  baseUrl: string = 'https://api.deepseek.com',
+  model: string = 'deepseek-chat',
+  handlers: StreamHandler
+): Promise<void> {
+  const { onChunk, onComplete, onError } = handlers;
+
+  if (!apiKey) {
+    onError('请先配置 API Key');
+    return;
+  }
+
+  const url = `${baseUrl}/v1/chat/completions`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system' as const, content: SYSTEM_PROMPT },
+          ...messages,
+        ],
+        temperature: 0.7,
+        max_tokens: 4096,
+        stream: true,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      onError(error.error?.message || `API 请求失败: ${response.status}`);
+      return;
+    }
+
+    if (!response.body) {
+      onError('未收到响应内容');
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6);
+          if (data === '[DONE]') {
+            onComplete();
+            return;
+          }
+          
+          try {
+            const parsed = JSON.parse(data);
+            const content = parsed.choices?.[0]?.delta?.content;
+            if (content) {
+              onChunk(content);
+            }
+          } catch {
+            // Ignore parse errors
+          }
+        }
+      }
+    }
+
+    onComplete();
+  } catch (error) {
+    onError(error instanceof Error ? error.message : '流式请求失败');
+  }
 }
 
 export function buildUserPrompt(
